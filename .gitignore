@@ -1,0 +1,17 @@
+# Build output
+bin/
+obj/
+dist/
+publish/
+
+# Ảnh xem trước tạo bằng --preview
+preview/
+
+# Ảnh gốc độ phân giải cao (app chỉ dùng assets/liquid.jpg)
+assets/liquid-source.png
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
