@@ -12,6 +12,8 @@ public sealed class Settings
     public UiStyle Ui { get; set; } = UiStyle.Glass;
     public TrayIconStyle IconStyle { get; set; } = TrayIconStyle.Number;
     public bool Notify { get; set; } = true;
+    /// <summary>Nhiều thiết bị cùng kết nối thì gom vào một icon duy nhất.</summary>
+    public bool Combine { get; set; } = true;
     /// <summary>Ngưỡng cảnh báo theo địa chỉ thiết bị; 0 = không cảnh báo.</summary>
     public Dictionary<string, int> Thresholds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 

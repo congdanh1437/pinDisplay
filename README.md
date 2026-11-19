@@ -4,7 +4,7 @@ App nhỏ chạy trên khay hệ thống (taskbar) Windows, hiển thị % pin c
 
 ## Tính năng
 
-- Mỗi thiết bị đang kết nối có một icon riêng trên taskbar, kiểu **số % + thanh pin** hoặc **hình cục pin**.
+- Hiện pin trên taskbar, kiểu **số % + thanh pin** hoặc **hình cục pin**. Khi có nhiều thiết bị, mặc định gom chung vào **1 icon**: kiểu số hiện % thấp nhất kèm mỗi thiết bị một thanh, kiểu pin xếp chồng các cục pin (tối đa 3). Có thể tắt gom để mỗi thiết bị một icon riêng.
 - Bấm vào icon để mở popup chi tiết, với 2 giao diện:
   - **Kính (Liquid Glass)**: kính dày dựng theo mô hình quang học (khúc xạ Snell, tán sắc, Fresnel, highlight, bóng đổ, caustic) trên nền chất lỏng 3D.
   - **Hiện đại (Tối)**: nền xanh đen, thẻ bo lớn, thẻ chuyển xanh khi hover.

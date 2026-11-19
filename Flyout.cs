@@ -403,6 +403,7 @@ public sealed class Flyout : Form
         m.Header("Biểu tượng trên taskbar");
         m.Item("Số % và thanh pin", () => _app.SetIconStyle(TrayIconStyle.Number), s.IconStyle == TrayIconStyle.Number);
         m.Item("Hình cục pin", () => _app.SetIconStyle(TrayIconStyle.Battery), s.IconStyle == TrayIconStyle.Battery);
+        m.Item("Gom nhiều thiết bị vào 1 icon", () => _app.SetCombine(!s.Combine), s.Combine);
         m.Separator();
         m.Item("Thông báo khi pin yếu", () => _app.SetNotify(!s.Notify), s.Notify);
         m.Item("Mở cài đặt Bluetooth", OpenBluetoothSettings);

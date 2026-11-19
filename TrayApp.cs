@@ -9,6 +9,7 @@ namespace PinDisplay;
 /// <summary>Mỗi thiết bị đang kết nối = một icon trên khay hệ thống. Bấm vào icon để mở bảng chi tiết.</summary>
 public sealed class TrayApp : ApplicationContext
 {
+    private const string CombinedKey = "*combined*";
     private readonly Dictionary<string, NotifyIcon> _icons = new();
     private readonly HashSet<string> _lowNotified = new();
     // Cắm/ngắt thiết bị được báo ngay qua sự kiện; quét định kỳ chỉ để cập nhật % pin (thay đổi chậm).
@@ -65,29 +66,46 @@ public sealed class TrayApp : ApplicationContext
     {
         var connected = _last.Where(d => d.Connected).ToList();
         bool lightBar = Theme.TaskbarIsLight();
+        bool combine = Settings.Combine && connected.Count >= 2;
+        var wanted = combine ? new[] { CombinedKey } : connected.Select(d => d.Address).ToArray();
 
-        foreach (var addr in _icons.Keys.Except(connected.Select(d => d.Address)).ToList())
+        foreach (var key in _icons.Keys.Except(wanted).ToList())
         {
-            DisposeIcon(_icons[addr]);
-            _icons.Remove(addr);
-            _lowNotified.Remove(addr);
+            DisposeIcon(_icons[key]);
+            _icons.Remove(key);
+        }
+        _lowNotified.IntersectWith(connected.Select(d => d.Address));
+
+        NotifyIcon GetIcon(string key)
+        {
+            if (!_icons.TryGetValue(key, out var ni)) _icons[key] = ni = NewIcon();
+            ni.Visible = true;
+            return ni;
+        }
+
+        if (combine)
+        {
+            var ni = GetIcon(CombinedKey);
+            SetIcon(ni, connected.Select(d => (int?)d.Percent).ToList(), lightBar);
+            ni.Text = Trim(string.Join("\n", connected.Select(d => $"{d.Name}: {d.Percent}%")));
+        }
+        else
+        {
+            foreach (var d in connected)
+            {
+                var ni = GetIcon(d.Address);
+                SetIcon(ni, [d.Percent], lightBar);
+                ni.Text = Trim($"{d.Name} — {d.Percent}%");
+            }
         }
 
         foreach (var d in connected)
         {
-            if (!_icons.TryGetValue(d.Address, out var ni))
-            {
-                ni = NewIcon();
-                _icons[d.Address] = ni;
-            }
-            SetIcon(ni, d.Percent, lightBar);
-            ni.Text = Trim($"{d.Name} — {d.Percent}%");
-            ni.Visible = true;
-
             int threshold = Settings.ThresholdFor(d.Address);
             bool low = threshold > 0 && d.Percent <= threshold;
             if (low && Settings.Notify && _lowNotified.Add(d.Address))
-                ni.ShowBalloonTip(5000, "Pin yếu", $"{d.Name} chỉ còn {d.Percent}%", ToolTipIcon.Warning);
+                _icons[combine ? CombinedKey : d.Address]
+                    .ShowBalloonTip(5000, "Pin yếu", $"{d.Name} chỉ còn {d.Percent}%", ToolTipIcon.Warning);
             else if (!low)
                 _lowNotified.Remove(d.Address);
         }
@@ -96,7 +114,7 @@ public sealed class TrayApp : ApplicationContext
         {
             _placeholder ??= NewIcon();
             _placeholder.Text = "PinDisplay — chưa có thiết bị Bluetooth báo pin";
-            SetIcon(_placeholder, null, lightBar);
+            SetIcon(_placeholder, [null], lightBar);
             _placeholder.Visible = true;
         }
         else if (_placeholder is not null)
@@ -155,6 +173,13 @@ public sealed class TrayApp : ApplicationContext
         Settings.Ui = style;
         Settings.Save();
         _flyout.ApplyTheme();
+    }
+
+    public void SetCombine(bool on)
+    {
+        Settings.Combine = on;
+        Settings.Save();
+        Apply();
     }
 
     public void SetNotify(bool on)
@@ -220,13 +245,26 @@ public sealed class TrayApp : ApplicationContext
     }
 
     // ---------- Icon trên khay ----------
-    private void SetIcon(NotifyIcon ni, int? percent, bool lightBar)
+    private void SetIcon(NotifyIcon ni, IReadOnlyList<int?> levels, bool lightBar)
     {
         var old = ni.Icon;
         ni.Icon = Settings.IconStyle == TrayIconStyle.Battery
-            ? RenderBattery(percent, lightBar)
-            : RenderNumber(percent, lightBar);
+            ? RenderBattery(levels, lightBar)
+            : RenderNumber(levels, lightBar);
         old?.Dispose();
+    }
+
+    /// <summary>Icon nhỏ chỉ đủ chỗ cho tối đa 3 hàng: giữ 3 thiết bị pin thấp nhất, theo thứ tự ban đầu.</summary>
+    private static List<int?> Fit(IReadOnlyList<int?> levels, int max = 3) =>
+        levels.Count <= max
+            ? levels.ToList()
+            : levels.Select((p, i) => (p, i)).OrderBy(x => x.p ?? 101).Take(max).OrderBy(x => x.i).Select(x => x.p).ToList();
+
+    private static void FillPill(Graphics g, RectangleF r, Color c)
+    {
+        using var p = Theme.RoundRect(r, r.Height / 2);
+        using var b = new SolidBrush(c);
+        g.FillPath(b, p);
     }
 
     private static void DisposeIcon(NotifyIcon ni)
@@ -266,26 +304,32 @@ public sealed class TrayApp : ApplicationContext
         return g;
     }
 
-    /// <summary>Kiểu 1: số % + thanh pin nhỏ bên dưới.</summary>
-    private static Icon RenderNumber(int? percent, bool lightBar)
+    /// <summary>
+    /// Kiểu 1: số % + thanh pin nhỏ bên dưới. Nhiều thiết bị: số là % thấp nhất,
+    /// mỗi thiết bị một thanh xếp chồng bên dưới.
+    /// </summary>
+    private static Icon RenderNumber(IReadOnlyList<int?> levels, bool lightBar)
     {
         int s = Math.Max(16, SystemInformation.SmallIconSize.Width);
+        var rows = Fit(levels);
+        int n = rows.Count;
+        int? percent = rows.Any(p => p.HasValue) ? rows.Min() : null;
         var (fg, level) = Colors(percent, lightBar);
         var textColor = percent is <= 20 ? level : fg;
 
         using var bmp = new Bitmap(s, s);
         using (var g = Prepare(bmp))
         {
-            float barH = Math.Max(2.5f, s * 0.16f);
-            var track = new RectangleF(s * 0.06f, s - barH - s * 0.02f, s * 0.88f, barH);
-            using (var p = Theme.RoundRect(track, barH / 2))
-            using (var b = new SolidBrush(Color.FromArgb(lightBar ? 60 : 80, fg))) g.FillPath(b, p);
-            if (percent is int pct)
+            float barH = n == 1 ? Math.Max(2.5f, s * 0.16f) : Math.Max(2f, s * 0.11f);
+            float gap = Math.Max(1f, s * 0.06f);
+            float barsTop = s - s * 0.02f - n * barH - (n - 1) * gap;
+            var track = new RectangleF(s * 0.06f, barsTop, s * 0.88f, barH);
+            for (int i = 0; i < n; i++)
             {
-                var fill = track with { Width = Math.Max(barH, track.Width * pct / 100f) };
-                using var p = Theme.RoundRect(fill, barH / 2);
-                using var b = new SolidBrush(level);
-                g.FillPath(b, p);
+                var row = track with { Y = barsTop + i * (barH + gap) };
+                FillPill(g, row, Color.FromArgb(lightBar ? 60 : 80, fg));
+                if (rows[i] is int pct)
+                    FillPill(g, row with { Width = Math.Max(barH, row.Width * pct / 100f) }, Colors(pct, lightBar).level);
             }
 
             // Số %: vẽ bằng path rồi co cho vừa khung phía trên thanh pin
@@ -313,36 +357,62 @@ public sealed class TrayApp : ApplicationContext
         return ToIcon(bmp);
     }
 
-    /// <summary>Kiểu 2: hình cục pin nằm ngang, phần ruột tô theo % pin.</summary>
-    private static Icon RenderBattery(int? percent, bool lightBar)
+    /// <summary>
+    /// Kiểu 2: hình cục pin nằm ngang, phần ruột tô theo % pin.
+    /// 2 thiết bị: hai cục pin xếp chồng; 3 thiết bị: ba thanh pin.
+    /// </summary>
+    private static Icon RenderBattery(IReadOnlyList<int?> levels, bool lightBar)
     {
         int s = Math.Max(16, SystemInformation.SmallIconSize.Width);
-        var (fg, level) = Colors(percent, lightBar);
+        var rows = Fit(levels);
+        int n = rows.Count;
+        var fg = Colors(null, lightBar).fg;
 
         using var bmp = new Bitmap(s, s);
         using (var g = Prepare(bmp))
         {
-            float stroke = Math.Max(1.25f, s / 13f);
-            float nubW = Math.Max(1.5f, s * 0.1f);
-            float h = s * 0.6f;
-            var body = new RectangleF(stroke / 2 + 0.25f, (s - h) / 2, s - nubW - stroke - 0.75f, h);
-            using (var p = Theme.RoundRect(body, s * 0.14f))
-            using (var pen = new Pen(fg, stroke))
-                g.DrawPath(pen, p);
-
-            var nub = new RectangleF(body.Right + stroke / 2 + 0.25f, body.Y + h * 0.3f, nubW - 0.25f, h * 0.4f);
-            using (var p = Theme.RoundRect(nub, nubW / 2))
-            using (var b = new SolidBrush(fg))
-                g.FillPath(b, p);
-
-            if (percent is int pct)
+            if (n >= 3)
             {
-                float gap = stroke + Math.Max(0.75f, s / 24f);
-                var inner = RectangleF.Inflate(body, -gap, -gap);
-                var fill = inner with { Width = Math.Max(inner.Height * 0.35f, inner.Width * pct / 100f) };
-                using var p = Theme.RoundRect(fill, s * 0.06f);
-                using var b = new SolidBrush(level);
-                g.FillPath(b, p);
+                // Quá chật cho viền pin: chỉ vẽ thanh nền + phần pin còn lại
+                float gap = Math.Max(1.5f, s * 0.09f);
+                float barH = (s * 0.92f - gap * (n - 1)) / n;
+                float top = (s - (n * barH + (n - 1) * gap)) / 2;
+                for (int i = 0; i < n; i++)
+                {
+                    var row = new RectangleF(s * 0.04f, top + i * (barH + gap), s * 0.92f, barH);
+                    FillPill(g, row, Color.FromArgb(lightBar ? 60 : 80, fg));
+                    if (rows[i] is int pct)
+                        FillPill(g, row with { Width = Math.Max(barH, row.Width * pct / 100f) }, Colors(pct, lightBar).level);
+                }
+                return ToIcon(bmp);
+            }
+
+            float stroke = n == 1 ? Math.Max(1.25f, s / 13f) : Math.Max(1f, s / 16f);
+            float nubW = Math.Max(1.5f, s * 0.1f);
+            float gapY = Math.Max(2.5f, s * 0.16f);
+            float h = n == 1 ? s * 0.6f : (s - stroke - gapY) / 2;
+            float top0 = n == 1 ? (s - h) / 2 : stroke / 2;
+            for (int i = 0; i < n; i++)
+            {
+                var body = new RectangleF(stroke / 2 + 0.25f, top0 + i * (h + gapY), s - nubW - stroke - 0.75f, h);
+                using (var p = Theme.RoundRect(body, Math.Min(s * 0.14f, h * 0.3f)))
+                using (var pen = new Pen(fg, stroke))
+                    g.DrawPath(pen, p);
+
+                var nub = new RectangleF(body.Right + stroke / 2 + 0.25f, body.Y + h * 0.3f, nubW - 0.25f, h * 0.4f);
+                using (var p = Theme.RoundRect(nub, Math.Min(nubW, nub.Height) / 2))
+                using (var b = new SolidBrush(fg))
+                    g.FillPath(b, p);
+
+                if (rows[i] is int pct)
+                {
+                    float inset = stroke + Math.Max(n == 1 ? 0.75f : 0.6f, s / 24f);
+                    var inner = RectangleF.Inflate(body, -inset, -inset);
+                    var fill = inner with { Width = Math.Max(inner.Height * 0.35f, inner.Width * pct / 100f) };
+                    using var p = Theme.RoundRect(fill, Math.Min(s * 0.06f, fill.Height / 2));
+                    using var b = new SolidBrush(Colors(pct, lightBar).level);
+                    g.FillPath(b, p);
+                }
             }
         }
         return ToIcon(bmp);
@@ -369,14 +439,15 @@ public sealed class TrayApp : ApplicationContext
         app.Settings.Ui = original;
 
         foreach (var light in new[] { false, true })
-        using (var strip = new Bitmap(6 * 40, 80))
+        using (var strip = new Bitmap(9 * 40, 80))
         {
             using (var g = Graphics.FromImage(strip))
             {
                 g.Clear(light ? Theme.Hex(0xEEEEEE) : Theme.Hex(0x1C1C1C));
                 g.InterpolationMode = InterpolationMode.NearestNeighbor;
                 int i = 0;
-                foreach (int? p in new int?[] { 100, 85, 50, 35, 12, null })
+                var samples = new int?[][] { [100], [85], [50], [35], [12], [null], [80, 45], [90, 15], [70, 40, 10] };
+                foreach (var p in samples)
                 {
                     using var a = RenderNumber(p, light);
                     using var b = RenderBattery(p, light);
