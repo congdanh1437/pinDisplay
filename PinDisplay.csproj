@@ -10,7 +10,6 @@
     <AssemblyName>PinDisplay</AssemblyName>
     <RootNamespace>PinDisplay</RootNamespace>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <InvariantGlobalization>true</InvariantGlobalization>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <ApplicationIcon>app.ico</ApplicationIcon>
     <Version>1.2.0</Version>
